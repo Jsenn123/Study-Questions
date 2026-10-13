@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>在线刷题</title>
+    <!-- 代码高亮主题：两套样式表按 data-theme 切换 disabled（见 JS/app.js 的 applyTheme） -->
+    <link rel="stylesheet" href="lib/highlightjs/github.min.css" id="hljs-light-theme">
+    <link rel="stylesheet" href="lib/highlightjs/github-dark.min.css" id="hljs-dark-theme" disabled>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <header class="navbar">
+        <div class="navbar-brand" onclick="switchView('home')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+                <line x1="8" y1="7" x2="16" y2="7"/>
+                <line x1="8" y1="11" x2="14" y2="11"/>
+            </svg>
+            <span>在线刷题</span>
+        </div>
+        <div class="navbar-actions">
+            <button class="nav-btn" id="theme-toggle" onclick="toggleTheme()" title="切换主题">
+                <span id="theme-icon">&#127769;</span>
+            </button>
+        </div>
+    </header>
+    <main id="app">
+        <!-- 首页 / 答题 / 结果三个视图均由 JS 动态渲染（见 JS/app.js 的 switchView） -->
+    </main>
+
+    <!-- 提示浮层 -->
+    <div class="toast" id="toast"></div>
+
+    <!-- highlight.js 核心 + 各语言语法包；代码块的语言须在此引入，否则该代码块按纯文本显示 -->
+    <script src="lib/highlightjs/highlight.min.js"></script>
+    <script src="lib/highlightjs/java.min.js"></script>
+    <script src="lib/highlightjs/python.min.js"></script>
+    <script src="lib/highlightjs/javascript.min.js"></script>
+    <script src="lib/highlightjs/cpp.min.js"></script>
+    <script src="lib/highlightjs/go.min.js"></script>
+    <script src="lib/highlightjs/rust.min.js"></script>
+    <script src="lib/highlightjs/c.min.js"></script>
+    <script src="lib/highlightjs/csharp.min.js"></script>
+    <script src="lib/highlightjs/sql.min.js"></script>
+    <script src="lib/highlightjs/typescript.min.js"></script>
+    <script src="lib/highlightjs/php.min.js"></script>
+    <script src="lib/highlightjs/ruby.min.js"></script>
+    <script src="lib/highlightjs/swift.min.js"></script>
+    <script src="lib/highlightjs/kotlin.min.js"></script>
+    <script src="lib/highlightjs/scala.min.js"></script>
+    <script src="lib/highlightjs/r.min.js"></script>
+    <script src="lib/highlightjs/bash.min.js"></script>
+    <script src="lib/highlightjs/css.min.js"></script>
+    <script src="lib/highlightjs/json.min.js"></script>
+    <script src="lib/highlightjs/xml.min.js"></script>
+    <script src="lib/highlightjs/yaml.min.js"></script>
+    <script src="lib/highlightjs/markdown.min.js"></script>
+    <!-- 应用主脚本（题面 Markdown 由 app.js 自带的 renderMd 渲染） -->
+    <script src="JS/app.js"></script>
+</body>
+</html>
