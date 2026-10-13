@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 应用图标（源文件）。
+     图形取自标题栏品牌区的书本图标（见 index.html 的 .titlebar-brand），
+     套在圆角方块底上并放大为 512×512，便于在任务栏 / 窗口角标的小尺寸下辨认。
+     改完本文件后运行 `npm run icon` 重新生成 assets/icon.png。 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="在线刷题">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#4338ca"/>
+    </linearGradient>
+  </defs>
+  <!-- 底：与界面主色（css 的 accent 变量）一致的圆角方块 -->
+  <rect width="512" height="512" rx="112" fill="url(#tile)"/>
+  <!-- 书本图标：与标题栏同一组路径。原始图形占 16×20 个格子，
+       放大 16 倍后为 256×320，四周各留 64px，故平移 (64, 64) 即可居中 -->
+  <g transform="translate(64 64) scale(16)"
+     fill="none" stroke="#ffffff" stroke-width="2"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+    <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+    <line x1="8" y1="7" x2="16" y2="7"/>
+    <line x1="8" y1="11" x2="14" y2="11"/>
+  </g>
+</svg>

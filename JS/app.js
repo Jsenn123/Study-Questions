@@ -19,6 +19,7 @@ var AppState = {
   currentView: "home", // 当前视图："home" | "quiz" | "result"
   filterType: "all", // 答题页的题型筛选："all" 或具体题型标识
   reviewFilter: "all", // 结果页的回顾筛选："all" | "correct" | "wrong" | "skipped"
+  sidebarCollapsed: null, // 答题页侧栏是否折叠；null = 跟随窗口宽度自动决定（窄屏折叠）
   startTime: null, // 开始答题的时间戳
   endTime: null, // 提交/结束的时间戳
   timerInterval: null, // 计时器句柄
@@ -324,17 +325,36 @@ function toggleTheme() {
   setTheme(getTheme() === "dark" ? "light" : "dark");
   applyTheme();
 }
-// 应用主题：切换 <html data-theme>、按钮图标，以及 highlight.js 的亮/暗样式表
+// 应用主题：切换 <html data-theme>、按钮图标、highlight.js 的亮/暗样式表，
+// 以及 Electron 中原生窗口按钮与窗口底色的配色
 function applyTheme() {
   var t = getTheme();
+  var dark = t === "dark";
   document.documentElement.setAttribute("data-theme", t);
   var icon = document.getElementById("theme-icon");
-  if (icon) icon.innerHTML = t === "dark" ? "☀️" : "🌙";
+  if (icon) icon.innerHTML = dark ? "☀️" : "🌙";
   var ls = document.getElementById("hljs-light-theme");
   var ds = document.getElementById("hljs-dark-theme");
   if (ls && ds) {
-    ls.disabled = t === "dark";
-    ds.disabled = t !== "dark";
+    ls.disabled = dark;
+    ds.disabled = !dark;
+  }
+  // 与 CSS 的 --bg-primary 对应，供系统窗口/浏览器界面着色
+  var meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", dark ? "#0e1116" : "#f5f6f8");
+  // 在 Electron 中运行（浏览器里没有 window.desktop）时同步原生窗口按钮配色
+  if (window.desktop && window.desktop.setTitleBarTheme) {
+    window.desktop.setTitleBarTheme(t);
+  }
+}
+
+// Electron 中给 <html> 打上标记：标题栏据此预留右上角原生窗口按钮的位置，
+// 并在 macOS 下改为左侧留白（红绿灯按钮）。浏览器中打开时不做任何处理。
+function initDesktopChrome() {
+  if (!window.desktop) return;
+  document.documentElement.classList.add("is-electron");
+  if (window.desktop.platform === "darwin") {
+    document.documentElement.classList.add("is-mac");
   }
 }
 
@@ -373,11 +393,19 @@ function switchView(view) {
   if (view === "home") renderHomeView();
   else if (view === "quiz") renderQuizView();
   else if (view === "result") renderResultView();
+  updateTitlebarContext();
   saveState();
 }
 
+// 标题栏中显示当前题库名（无题库时留空，见 css 的 .titlebar-context:empty）
+function updateTitlebarContext() {
+  var el = document.getElementById("titlebar-context");
+  if (!el) return;
+  el.textContent = AppState.currentBank ? AppState.currentBank.title : "";
+}
+
 // ============ 首页视图 ============
-// 首页：当前题库概览 + 模式选择 + 导入导出 + 已保存题库列表
+// 首页：题库列表（载入 / 导出 / 删除） + 刷题模式选择 + 开始刷题
 function renderHomeView() {
   var app = document.getElementById("app");
   var bank = AppState.currentBank;
@@ -388,98 +416,132 @@ function renderHomeView() {
     if (d) banks = JSON.parse(d);
   } catch (e) {}
 
-  var html =
-    '<div class="home-welcome"><h2>📝 在线刷题</h2><p>导入题库，选择模式，开始练习</p></div>';
-  html += '<div class="home-bank-card">';
+  var html = '<div class="view-home">';
 
-  if (bank) {
-    // 按题型统计题量，用于展示题数徽章
-    var counts = { single: 0, multi: 0, truefalse: 0, fill: 0, code: 0 };
-    bank.questions.forEach(function (q) {
-      counts[q.type] = (counts[q.type] || 0) + 1;
-    });
-    var stats =
-      '<span class="stat-badge accent">' + bank.questions.length + " 题</span>";
-    [
-      "single",
-      "multi",
-      "truefalse",
-      "fill",
-      "code",
-      "codefill",
-      "programming",
-    ].forEach(function (t) {
-      if (counts[t] > 0)
-        stats +=
-          '<span class="stat-badge">' +
-          counts[t] +
-          " " +
-          (TYPE_CN[t] || t) +
-          "</span>";
-    });
-    html +=
-      "<h2>" +
-      escapeHtml(bank.title) +
-      '</h2><div class="home-bank-stats">' +
-      stats +
-      "</div>";
-  } else {
-    html += "<h2>请选择或导入题库</h2>";
-  }
-
-  // 模式选择
-  html += '<div class="mode-cards">';
+  // 题库区标题行：左标题、右导入/导出
+  html += '<div class="home-toolbar">';
+  html += '<h2 class="section-title">题库</h2>';
+  html += '<div class="home-toolbar-actions">';
   html +=
-    '<div class="mode-card' +
-    (AppState.mode === "instant" ? " selected" : "") +
-    '" onclick="selectMode(\'instant\')"><span class="mode-icon">📖</span><h3>即时模式</h3><p>每答完一题立即显示答案和解析，适合学习和练习</p></div>';
-  html +=
-    '<div class="mode-card' +
-    (AppState.mode === "batch" ? " selected" : "") +
-    '" onclick="selectMode(\'batch\')"><span class="mode-icon">📝</span><h3>考试模式</h3><p>全部答完后才显示答案和解析，适合模拟考试</p></div>';
-  html += "</div>";
-
-  // 导入/导出
-  html +=
-    '<div class="home-actions" style="margin-bottom:16px"><button class="btn btn-primary" onclick="importBank()">📥 导入题库</button>';
+    '<button class="btn btn-primary" type="button" onclick="importBank()">📥 导入题库</button>';
   if (bank)
-    html += '<button class="btn" onclick="exportBank()">📤 导出题库</button>';
-  html += "</div>";
+    html +=
+      '<button class="btn" type="button" onclick="exportBank()">📤 导出题库</button>';
+  html += "</div></div>";
 
-  // 题库列表
+  // 题库列表：当前题库高亮；点标题区载入，右侧按钮为导出 / 删除
+  html += '<div class="bank-list">';
+  if (!banks.length) {
+    html +=
+      '<div class="empty-state">' +
+      '<span class="empty-state-icon" aria-hidden="true">📚</span>' +
+      '<span class="empty-state-title">还没有题库</span>' +
+      '<span class="empty-state-hint">点击上方「导入题库」，选择符合格式的 .md 文件；可先用 md/sample.md 试一下。</span>' +
+      "</div>";
+  }
   banks.forEach(function (b) {
     var active = bank && bank.title === b.title;
+    html += '<div class="bank-item' + (active ? " active" : "") + '">';
     html +=
-      '<div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:var(--bg-secondary);border:2px solid ' +
-      (active ? "var(--accent)" : "var(--border)") +
-      ';border-radius:var(--radius-sm);margin-bottom:8px;cursor:pointer" onclick="loadBank(\'' +
+      '<button class="bank-main" type="button" onclick="loadBank(\'' +
       escapeAttr(b.title) +
-      "')\">";
+      "')\"" +
+      (active ? ' aria-current="true"' : "") +
+      ">";
+    html += '<span class="bank-name">' + escapeHtml(b.title) + "</span>";
+    html += '<span class="bank-meta">' + bankStats(b) + "</span>";
+    html += "</button>";
+    html += '<div class="bank-actions">';
     html +=
-      '<div style="display:flex;align-items:center;gap:10px"><span style="font-size:20px">📚</span><div><div style="font-weight:600;font-size:14px">' +
-      escapeHtml(b.title) +
-      '</div><div style="font-size:12px;color:var(--text-secondary)">' +
-      b.questions.length +
-      " 题</div></div></div>";
-    html +=
-      '<div style="display:flex;gap:4px"><button class="btn" style="padding:4px 10px;font-size:12px" onclick="event.stopPropagation();exportNamed(\'' +
+      '<button class="btn btn-sm" type="button" onclick="exportNamed(\'' +
       escapeAttr(b.title) +
       "')\">导出</button>";
     html +=
-      '<button class="btn btn-danger" style="padding:4px 10px;font-size:12px" onclick="event.stopPropagation();deleteBank(\'' +
+      '<button class="btn btn-sm btn-danger" type="button" onclick="deleteBank(\'' +
       escapeAttr(b.title) +
-      "')\">删除</button></div></div>";
+      "')\">删除</button>";
+    html += "</div></div>";
   });
+  html += "</div>";
 
-  if (AppState.mode && bank) {
+  // 刷题模式
+  html += '<div class="home-block">';
+  html += '<h2 class="section-title">刷题模式</h2>';
+  html += '<div class="mode-cards">';
+  html += modeCard(
+    "instant",
+    "📖",
+    "即时模式",
+    "每答完一题立即显示答案和解析，适合学习与练习",
+  );
+  html += modeCard(
+    "batch",
+    "📝",
+    "考试模式",
+    "全部答完后统一查看答案与解析，适合模拟考试",
+  );
+  html += "</div></div>";
+
+  // 开始刷题：条件未齐时置灰并说明还缺什么
+  var ready = !!(AppState.mode && bank);
+  html += '<div class="home-cta">';
+  html +=
+    '<button class="btn btn-primary btn-lg" type="button" onclick="startQuiz()"' +
+    (ready ? "" : " disabled") +
+    ">🚀 开始刷题</button>";
+  if (!ready)
     html +=
-      '<div style="text-align:center;margin-top:16px"><button class="btn btn-primary btn-lg" onclick="startQuiz()">🚀 开始刷题</button></div>';
-  } else if (AppState.mode && !bank) {
-    html +=
-      '<div style="text-align:center;margin-top:16px;color:var(--text-muted);font-size:14px">请先选择或导入一个题库</div>';
-  }
+      '<span class="muted-hint">' +
+      (bank ? "再选择一个刷题模式" : "请先导入或选择一个题库") +
+      "</span>";
+  html += "</div>";
+
   html += "</div>";
   app.innerHTML = html;
+}
+
+// 首页的模式卡片；选中态用 aria-pressed 表达（圆点标记见 css 的 .mode-card.selected）
+function modeCard(mode, icon, title, desc) {
+  var on = AppState.mode === mode;
+  return (
+    '<button class="mode-card' +
+    (on ? " selected" : "") +
+    '" type="button" aria-pressed="' +
+    on +
+    '" onclick="selectMode(\'' +
+    mode +
+    '\')">' +
+    '<span class="mode-icon" aria-hidden="true">' +
+    icon +
+    "</span><h3>" +
+    title +
+    "</h3><p>" +
+    desc +
+    "</p></button>"
+  );
+}
+
+// 题库概览文字：总题数 + 有题目的题型分布（首页题库列表用）。
+// questions 缺失时按空数组处理，避免个别脏数据让整个首页渲染失败
+function bankStats(b) {
+  var qs = (b && b.questions) || [];
+  var counts = {};
+  qs.forEach(function (q) {
+    counts[q.type] = (counts[q.type] || 0) + 1;
+  });
+  var parts = [qs.length + " 题"];
+  [
+    "single",
+    "multi",
+    "truefalse",
+    "fill",
+    "code",
+    "codefill",
+    "programming",
+  ].forEach(function (t) {
+    if (counts[t]) parts.push((TYPE_CN[t] || t) + " " + counts[t]);
+  });
+  return parts.join(" · ");
 }
 
 // 选择刷题模式（"instant" 即时 / "batch" 考试）
@@ -636,6 +698,7 @@ function updateTimer() {
 function startQuiz() {
   if (!AppState.currentBank || !AppState.mode) return;
   AppState.currentIndex = 0;
+  AppState.sidebarCollapsed = null; // 重新按当前窗口宽度决定侧栏折叠
   AppState.userAnswers = new Array(AppState.currentBank.questions.length).fill(
     "",
   );
@@ -646,7 +709,8 @@ function startQuiz() {
   switchView("quiz");
 }
 
-// 答题页：进度条 + 题目网格（题型筛选）+ 当前题目 + 上一题/下一题导航
+// 答题页：双栏工作台 —— 左栏为题库信息 / 进度 / 题型筛选 / 题号导航 / 交卷，
+// 右栏为当前题目与翻页导航（窗口变窄时由 css 退化为单栏）
 function renderQuizView() {
   var app = document.getElementById("app");
   var bank = AppState.currentBank,
@@ -657,30 +721,7 @@ function renderQuizView() {
   }).length;
   var pct = Math.round(((idx + 1) / total) * 100);
   var modeLabel = AppState.mode === "instant" ? "⚡ 即时模式" : "📝 考试模式";
-
-  var html =
-    '<div class="quiz-header"><div class="progress-bar-container"><div class="progress-bar-fill" style="width:' +
-    pct +
-    '%"></div></div>';
-  html +=
-    '<div class="quiz-progress-text"><span>第 ' +
-    (idx + 1) +
-    " / " +
-    total +
-    " 题</span><span>已答 " +
-    answered +
-    ' 题</span><span class="quiz-mode-badge">' +
-    modeLabel +
-    '</span><span id="timer" style="font-variant-numeric:tabular-nums">00:00</span></div></div>';
-  // 题目网格与类型筛选（始终可见）
   var filterType = AppState.filterType || "all";
-  html += '<div class="q-grid-panel">';
-  html += '<div class="q-grid-filter-bar">';
-  var fAll = filterType === "all" ? " filter-active" : "";
-  html +=
-    '<button class="q-filter-btn' +
-    fAll +
-    '" onclick="setFilter(\'all\')">全部</button>';
   var typeOrder = [
     "single",
     "multi",
@@ -690,26 +731,71 @@ function renderQuizView() {
     "codefill",
     "programming",
   ];
+
+  var html = '<div class="quiz-layout">';
+
+  // ---- 左栏 ----
+  // 窄屏（CSS ≤900px 媒体查询）下折叠为「进度条 + 横向题号条」的紧凑面板，
+  // 统计 / 题型筛选 / 交卷收进可由 .sidebar-toggle 展开的区域；桌面端全部平铺。
+  var collapsed =
+    AppState.sidebarCollapsed == null
+      ? window.matchMedia &&
+        window.matchMedia("(max-width: 900px)").matches
+      : AppState.sidebarCollapsed;
+  html +=
+    '<aside class="quiz-sidebar' +
+    (collapsed ? " collapsed" : "") +
+    '" id="quiz-sidebar">';
+  html +=
+    '<div class="sidebar-heading"><span class="sidebar-bank">' +
+    escapeHtml(bank.title) +
+    '</span><span class="quiz-mode-badge">' +
+    modeLabel +
+    '</span><button class="sidebar-toggle" type="button" onclick="toggleSidebar()" aria-expanded="' +
+    !collapsed +
+    '" aria-label="展开或收起筛选与统计"><span>筛选</span><span class="sidebar-toggle-icon" aria-hidden="true">▾</span></button></div>';
+
+  // 进度条（窄屏折叠时仍保留）+ 进度 / 已答 / 用时（折叠时隐藏）
+  html +=
+    '<div class="sidebar-section"><div class="progress-bar-container" role="progressbar" aria-label="答题进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' +
+    pct +
+    '"><div class="progress-bar-fill" style="width:' +
+    pct +
+    '%"></div></div>';
+  html +=
+    '<div class="sidebar-stats"><span class="sidebar-stat"><span>进度</span><b>第 ' +
+    (idx + 1) +
+    " / " +
+    total +
+    ' 题</b></span><span class="sidebar-stat"><span>已答</span><b>' +
+    answered +
+    " / " +
+    total +
+    '</b></span><span class="sidebar-stat"><span>用时</span><b id="timer">00:00</b></span></div></div>';
+
+  // 题型筛选（窄屏折叠时隐藏）
+  html +=
+    '<div class="sidebar-section sb-filter"><h3 class="section-title">题型筛选</h3><div class="q-grid-filter-bar">';
+  html += filterBtn("setFilter('all')", "全部", filterType === "all", null, "all");
   typeOrder.forEach(function (t) {
     var cnt = bank.questions.filter(function (q) {
       return q.type === t;
     }).length;
     if (cnt > 0) {
-      var act = filterType === t ? " filter-active" : "";
-      html +=
-        '<button class="q-filter-btn' +
-        act +
-        '" onclick="setFilter(\'' +
-        t +
-        "')\">" +
-        (TYPE_CN[t] || t) +
-        '<span class="filter-count">' +
-        cnt +
-        "</span></button>";
+      html += filterBtn(
+        "setFilter('" + t + "')",
+        TYPE_CN[t] || t,
+        filterType === t,
+        cnt,
+        t,
+      );
     }
   });
-  html += "</div>";
-  html += '<div class="question-grid" id="q-grid">';
+  html += "</div></div>";
+
+  // 题号导航（侧栏有纵向空间，故换行铺开而非横向滚动；窄屏由 CSS 改为横向滚动条）
+  html +=
+    '<div class="sidebar-section"><h3 class="section-title">题目导航</h3><div class="question-grid" id="q-grid">';
   var any = false;
   for (var i = 0; i < total; i++) {
     var qi = bank.questions[i];
@@ -733,39 +819,73 @@ function renderQuizView() {
     html +=
       '<button class="' +
       c +
-      '" onclick="jumpTo(' +
+      '" type="button" aria-current="' +
+      (i === idx) +
+      '" aria-label="第 ' +
+      (i + 1) +
+      ' 题" onclick="jumpTo(' +
       i +
       ')">' +
       (i + 1) +
       "</button>";
   }
-  if (!any)
-    html +=
-      '<span style="color:var(--text-muted);font-size:0.85rem;padding:8px">该题型下暂无题目</span>';
-  html += '</div></div><div id="question-area"></div>';
-  var isFirst = idx === 0,
-    isLast = idx === total - 1;
-  html +=
-    '<div class="quiz-nav"><button class="btn" onclick="switchView(\'home\')">← 返回</button><div style="display:flex;gap:8px">';
-  html +=
-    '<button class="btn" onclick="navPrev()"' +
-    (isFirst ? " disabled" : "") +
-    ">← 上一题</button>";
-  html +=
-    '<button class="btn btn-primary" onclick="navNext()">' +
-    (isLast ? "完成" : "下一题 →") +
-    "</button></div></div>";
+  if (!any) html += '<span class="muted-hint">该题型下暂无题目</span>';
+  html += "</div></div>";
+
+  // 考试模式：交卷入口放在侧栏底部
   if (AppState.mode === "batch") {
     html +=
       '<div class="batch-submit-area"><p>已答 ' +
       answered +
       " / " +
       total +
-      ' 题</p><button class="btn btn-success btn-lg" onclick="submitBatch()">✅ 提交全部答案</button></div>';
+      ' 题</p><button class="btn btn-success" type="button" onclick="submitBatch()">✅ 提交全部答案</button></div>';
   }
+  html += "</aside>";
+
+  // ---- 右栏 ----
+  var isFirst = idx === 0,
+    isLast = idx === total - 1;
+  html += '<section class="quiz-main">';
+  html += '<div id="question-area"></div>';
+  html += '<div class="quiz-nav">';
+  html +=
+    '<button class="btn" type="button" onclick="switchView(\'home\')">← 返回首页</button>';
+  html += '<div class="quiz-nav-group">';
+  html +=
+    '<button class="btn" type="button" onclick="navPrev()"' +
+    (isFirst ? " disabled" : "") +
+    ">← 上一题</button>";
+  html +=
+    '<button class="btn btn-primary" type="button" onclick="navNext()">' +
+    (isLast ? "完成" : "下一题 →") +
+    "</button>";
+  html += "</div></div>";
+  html += "</section>";
+
+  html += "</div>";
   app.innerHTML = html;
   renderQuestion(idx);
   updateTimer();
+}
+
+// 题型筛选与结果页筛选共用的胶囊按钮。
+// onclick 为完整的调用表达式（如 setFilter('all')）；count 为 null 时不显示数量徽标
+function filterBtn(onclick, label, active, count, key) {
+  return (
+    '<button class="q-filter-btn' +
+    (active ? " filter-active" : "") +
+    '" type="button" aria-pressed="' +
+    active +
+    '"' +
+    (key ? ' data-filter="' + key + '"' : "") +
+    ' onclick="' +
+    onclick +
+    '">' +
+    label +
+    (count === null ? "" : '<span class="filter-count">' + count + "</span>") +
+    "</button>"
+  );
 }
 
 // 渲染第 idx 题到 #question-area；即时模式下已揭示的题目追加作答反馈与解析
@@ -777,13 +897,13 @@ function renderQuestion(idx) {
   var isRevealed = AppState.revealed[idx],
     isInstant = AppState.mode === "instant";
   var html =
-    '<div class="question-card"><span class="question-type-tag ' +
+    '<div class="question-card"><div class="question-head"><span class="question-type-tag ' +
     q.type +
     '">Q' +
     q.id +
     " · " +
     (TYPE_CN[q.type] || q.type) +
-    '</span><div class="question-stem">' +
+    '</span></div><div class="question-stem">' +
     renderMd(q.stem) +
     "</div>";
   if (q.type === "truefalse") html += renderTrueFalse(q, userAns, isRevealed);
@@ -822,17 +942,18 @@ function renderOptions(q, userAns, isRevealed) {
       if (correct.indexOf(c.letter) !== -1) cls += " correct";
       else if (picked.indexOf(c.letter) !== -1) cls += " wrong";
     } else if (picked.indexOf(c.letter) !== -1) cls += " selected";
-    var oc = isRevealed ? "" : " onclick=\"selectAnswer('" + c.letter + "')\"";
+    // 揭示后选项改为只读：去掉点击行为并置灰
+    var oc = isRevealed ? " disabled" : " onclick=\"selectAnswer('" + c.letter + "')\"";
     html +=
-      '<div class="' +
+      '<button class="' +
       cls +
-      '"' +
+      '" type="button"' +
       oc +
       '><span class="option-marker">' +
       c.letter +
       '</span><span class="option-text">' +
       renderMd(c.text) +
-      "</span></div>";
+      "</span></button>";
   });
   html += "</div>";
   // 多选题在即时模式下的确认按钮
@@ -843,7 +964,7 @@ function renderOptions(q, userAns, isRevealed) {
     userAns
   ) {
     html +=
-      '<div style="margin-top:12px;text-align:right"><button class="btn btn-primary" onclick="confirmMulti()">✔ 确认选择（' +
+      '<div class="inline-submit"><button class="btn btn-primary" type="button" onclick="confirmMulti()">✔ 确认选择（' +
       userAns.length +
       " 项）</button></div>";
   }
@@ -861,8 +982,15 @@ function renderTrueFalse(q, userAns, isRevealed) {
       if (c.letter === ca) cls += " correct";
       else if (c.letter === userAns) cls += " wrong";
     } else if (c.letter === userAns) cls += " selected";
-    var oc = isRevealed ? "" : " onclick=\"selectAnswer('" + c.letter + "')\"";
-    html += '<button class="' + cls + '"' + oc + ">" + c.text + "</button>";
+    var oc = isRevealed ? " disabled" : " onclick=\"selectAnswer('" + c.letter + "')\"";
+    html +=
+      '<button class="' +
+      cls +
+      '" type="button"' +
+      oc +
+      ">" +
+      c.text +
+      "</button>";
   });
   return html + "</div>";
 }
@@ -901,15 +1029,12 @@ function renderMultiBlank(q, userAns, isRevealed, mono) {
     if (userAns && userAns.charAt(0) === "[") userArr = JSON.parse(userAns);
   } catch (e) {}
 
-  var inputStyle =
-    ' style="width:160px' +
-    (mono ? ";font-family:var(--font-mono);font-size:0.9rem" : "") +
-    '"';
-  var html =
-    '<div class="fill-blanks-group" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">';
+  // 代码填空的空位通常更长，用 is-wide 放宽（宽度见 css 的 .fill-blanks-group）
+  var baseCls = "fill-input" + (mono ? " is-wide" : "");
+  var html = '<div class="fill-blanks-group">';
   for (var i = 1; i <= blankCount; i++) {
     var val = userArr[i - 1] || "";
-    var ic = "fill-input";
+    var ic = baseCls;
     if (isRevealed) {
       if (unordered) {
         // 无序模式：该值匹配任意一个空位的可接受答案即算对
@@ -938,25 +1063,26 @@ function renderMultiBlank(q, userAns, isRevealed, mono) {
     }
     var dis = isRevealed ? " disabled" : "";
     html +=
-      '<div style="display:flex;align-items:center;gap:4px"><span style="font-weight:600;font-size:0.85rem;color:var(--text-secondary)">' +
+      '<div class="blank-field"><span class="blank-index">' +
       i +
       ".</span>" +
       '<input type="text" class="' +
       ic +
       '" data-blank="' +
       i +
-      '" placeholder="第' +
+      '" aria-label="第 ' +
       i +
-      '空..." value="' +
+      ' 空" placeholder="第 ' +
+      i +
+      ' 空…" autocomplete="off" autocapitalize="off" spellcheck="false" value="' +
       escapeAttr(val) +
       '"' +
       dis +
-      inputStyle +
       "></div>";
   }
   if (showBtn)
     html +=
-      '<button class="btn btn-primary" onclick="submitFill()">确认</button>';
+      '<button class="btn btn-primary" type="button" onclick="submitFill()">确认</button>';
   html += "</div>";
 
   if (isRevealed && !checkAnswer(q, userAns)) {
@@ -972,9 +1098,9 @@ function renderMultiBlank(q, userAns, isRevealed, mono) {
           })
           .join(" ");
     html +=
-      '<div style="margin-top:8px;color:var(--success);font-size:0.9rem">正确答案：' +
+      '<div class="answer-reveal">正确答案：' +
       ansDisplay +
-      (unordered ? "（任意顺序）" : "") +
+      (unordered ? "（顺序不限）" : "") +
       "</div>";
   }
   return html;
@@ -995,20 +1121,17 @@ function renderFill(q, userAns, isRevealed) {
   var dis = isRevealed ? " disabled" : "";
   var cd = "";
   if (isRevealed && !ok)
-    cd =
-      '<div style="margin-top:8px;color:var(--success);font-size:0.9rem">正确答案：' +
-      escapeHtml(ca) +
-      "</div>";
+    cd = '<div class="answer-reveal">正确答案：' + escapeHtml(ca) + "</div>";
   return (
     '<div class="fill-input-group"><input type="text" class="' +
     ic +
-    '" id="fill-answer" placeholder="输入答案..." value="' +
+    '" id="fill-answer" aria-label="填空题作答" placeholder="输入答案…" autocomplete="off" autocapitalize="off" spellcheck="false" value="' +
     escapeAttr(userAns) +
     '"' +
     dis +
     ">" +
     (showBtn
-      ? '<button class="btn btn-primary" onclick="submitFill()">确认</button>'
+      ? '<button class="btn btn-primary" type="button" onclick="submitFill()">确认</button>'
       : "") +
     "</div>" +
     cd
@@ -1048,20 +1171,20 @@ function renderCodeFill(q, userAns, isRevealed) {
   var cd = "";
   if (isRevealed && !ok)
     cd =
-      '<div style="margin-top:8px;color:var(--success);font-size:0.9rem">正确答案：<code style="font-family:var(--font-mono);background:var(--bg-code);padding:2px 6px;border-radius:4px">' +
+      '<div class="answer-reveal">正确答案：<code>' +
       escapeHtml(ca) +
       "</code></div>";
   return (
     '<div class="code-fill-wrap">' +
     '<textarea class="' +
     taCls +
-    '" id="fill-answer" rows="4" placeholder="在此输入代码答案..."' +
+    '" id="fill-answer" rows="4" aria-label="代码填空作答" placeholder="在此输入代码…" autocomplete="off" autocapitalize="off" spellcheck="false"' +
     dis +
     ">" +
     escapeHtml(userAns) +
     "</textarea>" +
     (showBtn
-      ? '<div style="margin-top:8px;text-align:right"><button class="btn btn-primary" onclick="submitFill()">确认提交</button></div>'
+      ? '<div class="inline-submit"><button class="btn btn-primary" type="button" onclick="submitFill()">确认提交</button></div>'
       : "") +
     "</div>" +
     cd
@@ -1083,26 +1206,24 @@ function renderProgramming(q, userAns, isRevealed) {
       : '<div class="answer-label wrong">⚠ 请对照参考解答</div>';
     refHtml =
       label +
-      '<div style="margin-top:12px"><h4 style="color:var(--text-secondary);font-size:0.85rem;margin-bottom:6px">📖 参考解答</h4>' +
-      '<pre style="background:var(--bg-code);border:1px solid var(--border);border-radius:var(--radius-sm);padding:14px;overflow-x:auto;max-height:400px;overflow-y:auto">' +
-      '<code style="font-family:var(--font-mono);font-size:0.9rem;white-space:pre;background:none;padding:0">' +
+      '<div class="ref-solution"><h4>📖 参考解答</h4><pre><code>' +
       escapeHtml(ca) +
       "</code></pre></div>";
   }
   var placeholder = isRevealed
     ? "你的代码"
-    : "在此编写代码...（支持 Tab 缩进）";
+    : "在此编写代码…（支持 Tab 缩进）";
   return (
     '<div class="code-fill-wrap">' +
-    '<textarea class="code-fill-textarea" id="fill-answer" rows="10" placeholder="' +
+    '<textarea class="code-fill-textarea code-editor" id="fill-answer" rows="10" aria-label="编程题作答" placeholder="' +
     placeholder +
-    '"' +
+    '" autocomplete="off" autocapitalize="off" spellcheck="false"' +
     dis +
-    ' style="min-height:200px;font-family:var(--font-mono);font-size:0.9rem;tab-size:4">' +
+    ">" +
     escapeHtml(userAns) +
     "</textarea>" +
     (showBtn
-      ? '<div style="margin-top:8px;text-align:right"><button class="btn btn-primary" onclick="submitFill()">提交查看参考解答</button></div>'
+      ? '<div class="inline-submit"><button class="btn btn-primary" type="button" onclick="submitFill()">提交查看参考解答</button></div>'
       : "") +
     "</div>" +
     refHtml
@@ -1217,6 +1338,15 @@ function jumpTo(idx) {
 function setFilter(type) {
   AppState.filterType = type;
   renderQuizView();
+}
+// 展开/收起侧栏的筛选与统计区（仅窄屏下可见入口，桌面端由 CSS 隐藏按钮）
+function toggleSidebar() {
+  var sb = document.getElementById("quiz-sidebar");
+  if (!sb) return;
+  var collapsed = sb.classList.toggle("collapsed");
+  AppState.sidebarCollapsed = collapsed;
+  var btn = sb.querySelector(".sidebar-toggle");
+  if (btn) btn.setAttribute("aria-expanded", String(!collapsed));
 }
 // 考试模式交卷：有未答题时先确认，然后停止计时并进入结果页
 function submitBatch() {
@@ -1350,14 +1480,6 @@ function renderResultView() {
         : pct >= 50
           ? "needs-work"
           : "poor";
-  var barColor =
-    pct >= 90
-      ? "var(--success)"
-      : pct >= 70
-        ? "var(--accent)"
-        : pct >= 50
-          ? "var(--warning)"
-          : "var(--danger)";
   var emoji = pct >= 90 ? "🏆" : pct >= 70 ? "👏" : pct >= 50 ? "💪" : "😢";
   var elapsed =
     (AppState.endTime || Date.now()) - (AppState.startTime || Date.now());
@@ -1366,9 +1488,15 @@ function renderResultView() {
     ":" +
     String(Math.floor((elapsed % 60000) / 1000)).padStart(2, "0");
 
-  var html =
-    '<div class="result-hero"><div class="result-score-circle ' +
+  var html = '<div class="view-result">';
+  // 得分圆环由 CSS 的 conic-gradient 绘制，进度通过 --pct 传入
+  html +=
+    '<div class="result-hero grade-' +
     grade +
+    '"><div class="result-score" role="img" aria-label="得分 ' +
+    pct +
+    '%" style="--pct:' +
+    pct +
     '"><span class="result-percentage">' +
     pct +
     '<span class="result-percentage-sign">%</span></span></div>';
@@ -1380,80 +1508,45 @@ function renderResultView() {
     " 题，答对 " +
     correct +
     " 题</div>";
+  html += '<div class="result-stats">';
   html +=
-    '<div class="result-bar"><div class="result-bar-fill" style="width:' +
-    pct +
-    "%;background:" +
-    barColor +
-    '"></div></div>';
-  html +=
-    '<div style="display:flex;justify-content:center;gap:24px;margin-top:20px">';
-  html +=
-    '<div><strong style="color:var(--success)">' +
+    '<div class="result-stat is-correct"><b>' +
     correct +
-    '</strong><br><small style="color:var(--text-secondary)">正确</small></div>';
+    "</b><small>正确</small></div>";
   html +=
-    '<div><strong style="color:var(--danger)">' +
+    '<div class="result-stat is-wrong"><b>' +
     wrong +
-    '</strong><br><small style="color:var(--text-secondary)">错误</small></div>';
+    "</b><small>错误</small></div>";
   html +=
-    '<div><strong style="color:var(--text-muted)">' +
+    '<div class="result-stat"><b>' +
     skipped +
-    '</strong><br><small style="color:var(--text-secondary)">未答</small></div>';
+    "</b><small>未答</small></div>";
   html +=
-    "<div><strong>" +
+    '<div class="result-stat"><b class="tabular">' +
     ts +
-    '</strong><br><small style="color:var(--text-secondary)">用时</small></div></div>';
+    "</b><small>用时</small></div>";
+  html += "</div>";
   html +=
-    '<div class="result-actions"><button class="btn btn-primary" onclick="retryQuiz()">🔄 重新答题</button><button class="btn" onclick="switchView(\'home\')">🏠 返回首页</button></div></div>';
+    '<div class="result-actions"><button class="btn btn-primary" type="button" onclick="retryQuiz()">🔄 重新答题</button><button class="btn" type="button" onclick="switchView(\'home\')">🏠 返回首页</button></div></div>';
 
   // 回顾列表：卡片先全部渲染，再由筛选按钮/脚本控制显隐
   var revFilter = AppState.reviewFilter || "all";
-  html += '<div class="review-section"><h3>📋 答题回顾</h3>';
-  html += '<div class="q-grid-filter-bar" style="margin-bottom:12px">';
-  var rfAll = revFilter === "all" ? " filter-active" : "";
-  html +=
-    '<button class="q-filter-btn' +
-    rfAll +
-    '" onclick="setReviewFilter(\'all\')">全部<span class="filter-count">' +
-    total +
-    "</span></button>";
-  if (correct > 0) {
-    var rfC = revFilter === "correct" ? " filter-active" : "";
-    html +=
-      '<button class="q-filter-btn' +
-      rfC +
-      '" onclick="setReviewFilter(\'correct\')">✅ 答对<span class="filter-count">' +
-      correct +
-      "</span></button>";
-  }
-  if (wrong > 0) {
-    var rfW = revFilter === "wrong" ? " filter-active" : "";
-    html +=
-      '<button class="q-filter-btn' +
-      rfW +
-      '" onclick="setReviewFilter(\'wrong\')">❌ 答错<span class="filter-count">' +
-      wrong +
-      "</span></button>";
-  }
-  if (skipped > 0) {
-    var rfS = revFilter === "skipped" ? " filter-active" : "";
-    html +=
-      '<button class="q-filter-btn' +
-      rfS +
-      '" onclick="setReviewFilter(\'skipped\')">⏭️ 未答<span class="filter-count">' +
-      skipped +
-      "</span></button>";
-  }
+  html += '<div class="review-section"><h3 class="section-title">📋 答题回顾</h3>';
+  html += '<div class="q-grid-filter-bar">';
+  html += filterBtn("setReviewFilter('all')", "全部", revFilter === "all", total, "all");
+  if (correct > 0)
+    html += filterBtn("setReviewFilter('correct')", "✅ 答对", revFilter === "correct", correct, "correct");
+  if (wrong > 0)
+    html += filterBtn("setReviewFilter('wrong')", "❌ 答错", revFilter === "wrong", wrong, "wrong");
+  if (skipped > 0)
+    html += filterBtn("setReviewFilter('skipped')", "⏭️ 未答", revFilter === "skipped", skipped, "skipped");
   html += "</div>";
+  html += '<div class="review-list">';
   bank.questions.forEach(function (q, i) {
     var ua = AppState.userAnswers[i],
       ok = checkAnswer(q, ua);
     var status = !ua ? "skipped" : ok ? "correct" : "wrong";
-    var hidden =
-      revFilter !== "all" && revFilter !== status
-        ? ' style="display:none"'
-        : "";
+    var hidden = revFilter !== "all" && revFilter !== status ? ' hidden' : "";
     var icon = !ua ? "⏭️" : ok ? "✅" : "❌";
     html +=
       '<div class="review-card" data-review-status="' +
@@ -1462,7 +1555,7 @@ function renderResultView() {
       hidden +
       ">";
     html +=
-      '<div class="review-card-header"><span class="review-icon">' +
+      '<div class="review-card-header"><span class="review-icon" aria-hidden="true">' +
       icon +
       '</span><span class="review-q-id">Q' +
       q.id +
@@ -1476,7 +1569,7 @@ function renderResultView() {
       escapeHtml(q.answer) +
       "</strong></span></div>";
     html +=
-      '<button class="review-toggle" onclick="toggleReview(this)">查看解析 ▼</button>';
+      '<button class="review-toggle" type="button" aria-expanded="false" onclick="toggleReview(this)">查看解析 ▼</button>';
     html +=
       '<div class="review-detail"><div class="question-stem">' +
       renderMd(q.stem) +
@@ -1486,41 +1579,33 @@ function renderResultView() {
         '<div class="explanation-box">' + renderMd(q.explanation) + "</div>";
     html += "</div></div>";
   });
-  html += "</div>";
+  html += "</div></div>";
   app.innerHTML = html;
   highlightCode(app);
 }
 
-// 结果页回顾筛选：只显示命中状态的卡片（不重新渲染，仅切换 display）
+// 结果页回顾筛选：只显示命中状态的卡片（不重新渲染，仅切换 hidden）
 function setReviewFilter(type) {
   AppState.reviewFilter = type;
-  var cards = document.querySelectorAll(".review-card");
-  cards.forEach(function (c) {
-    var st = c.getAttribute("data-review-status");
-    c.style.display = type === "all" || type === st ? "" : "none";
+  document.querySelectorAll(".review-card").forEach(function (c) {
+    c.hidden = !(type === "all" || c.getAttribute("data-review-status") === type);
   });
-  // 同步筛选按钮的选中态（按按钮文字包含的标签匹配）
-  var btns = document.querySelectorAll(".review-section .q-filter-btn");
-  btns.forEach(function (b) {
-    b.classList.toggle(
-      "filter-active",
-      b.textContent.indexOf(
-        { all: "全部", correct: "答对", wrong: "答错", skipped: "未答" }[type],
-      ) !== -1,
-    );
-  });
+  // 同步筛选按钮的选中态（按 data-filter 匹配，不依赖按钮文案）
+  document
+    .querySelectorAll(".review-section .q-filter-btn[data-filter]")
+    .forEach(function (b) {
+      var on = b.getAttribute("data-filter") === type;
+      b.classList.toggle("filter-active", on);
+      b.setAttribute("aria-pressed", String(on));
+    });
 }
 // 展开/收起单张回顾卡片下的题面与解析
 function toggleReview(btn) {
   var d = btn.nextElementSibling;
-  if (d.classList.contains("open")) {
-    d.classList.remove("open");
-    btn.textContent = "查看解析 ▼";
-  } else {
-    d.classList.add("open");
-    btn.textContent = "收起解析 ▲";
-    highlightCode(d);
-  }
+  var open = d.classList.toggle("open");
+  btn.textContent = open ? "收起解析 ▲" : "查看解析 ▼";
+  btn.setAttribute("aria-expanded", String(open));
+  if (open) highlightCode(d);
 }
 // 重做当前题库：重置进度并重新计时
 function retryQuiz() {
@@ -1537,10 +1622,19 @@ function retryQuiz() {
 }
 
 // ============ 初始化 ============
-// 页面加载：应用主题并恢复到上次所在的视图
+// 页面加载：打上 Electron 标记、应用主题并恢复到上次所在的视图
 document.addEventListener("DOMContentLoaded", function () {
+  initDesktopChrome();
   applyTheme();
   switchView(loadSavedView());
+  // 侧栏折叠处于「自动」状态时，窗口跨越 900px 断点同步折叠/展开
+  var mq = window.matchMedia("(max-width: 900px)");
+  var syncSidebar = function () {
+    if (AppState.sidebarCollapsed != null) return;
+    var sb = document.getElementById("quiz-sidebar");
+    if (sb) sb.classList.toggle("collapsed", mq.matches);
+  };
+  if (mq.addEventListener) mq.addEventListener("change", syncSidebar);
 });
 
 // 代码文本域（编程题、代码填空题）内的 Tab 缩进支持，

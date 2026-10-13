@@ -10,10 +10,12 @@
 - **Markdown 题库**：导入导出 `.md` 文件，人机皆可读写
 - **多空填空题**：支持多空、乱序、备选答案
 - **22 种语言代码高亮**：Java、Python、C/C++、Go、Rust、SQL 等
-- **暗色主题**：亮色/暗色一键切换
+- **桌面端双栏工作台**：答题页左侧为进度 / 题型筛选 / 题号导航，右侧为题目区，宽窗口下不浪费横向空间
+- **暗色主题**：亮色/暗色一键切换，跟随系统原生控件配色
 - **题型筛选**：按题型过滤题目导航
 - **数据本地存储**：题库保存在浏览器 localStorage 中
 - **完全离线**：所有资源本地化，无需网络
+- **自定义窗口标题栏**（Electron）：自绘标题栏 + 系统原生窗口按钮，窗口尺寸与位置自动记忆
 
 ## 🚀 快速开始
 
@@ -42,13 +44,35 @@ npm start
 ├── md/
 │   ├── FORMAT.md       # 题库格式规范
 │   └── sample.md       # 示例题库（覆盖全部 7 种题型）
-├── main.js             # Electron 主进程入口
-├── preload.js          # 预加载脚本（当前为空）
+├── assets/
+│   ├── icon.svg        # 应用图标源文件（与标题栏品牌图标同一图形）
+│   └── icon.png        # 应用图标位图，由 `npm run icon` 从上面的 SVG 生成
+├── scripts/
+│   └── build-icon.js   # SVG → PNG 的图标生成脚本
+├── main.js             # Electron 主进程入口（窗口创建、尺寸记忆、主题 IPC）
+├── preload.js          # 预加载脚本（仅暴露窗口按钮配色接口）
 ├── package.json        # 依赖与启动脚本
 └── README.md           # 自述文件
 ```
 
+界面同时适配两种运行方式：直接用浏览器打开时，顶部是普通的导航条；用 Electron 运行时，
+同一条导航条即窗口标题栏（可拖动、右上角保留系统的最小化 / 最大化 / 关闭按钮）。
+两者的差异由 `main.js`、`preload.js` 与 CSS 的 `.is-electron` 规则处理，页面逻辑完全相同。
+
 > 题面 Markdown 由 `JS/app.js` 自带的轻量 `renderMd` 渲染，不依赖第三方 Markdown 库。
+
+## 🖥 桌面版（Electron）
+
+```bash
+npm install
+npm start
+```
+
+- **标题栏**：无边框窗口 + 系统原生窗口按钮覆盖，标题栏由页面自绘，随主题切换配色
+- **窗口记忆**：尺寸与位置保存在系统用户数据目录（`userData/win-state.json`），下次启动自动恢复
+- **图标**：`assets/icon.svg` 是源文件，改完后运行 `npm run icon` 重新生成 `assets/icon.png`
+- **快捷键**：`F12` 或 `Ctrl+Shift+I` 打开开发者工具
+- 无窗口菜单；题库仍存放在 localStorage 中，与浏览器版互相独立
 
 ## 📋 支持的题型
 
